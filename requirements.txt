@@ -1,0 +1,11 @@
+# Desktop shell.
+pywebview>=5.0
+
+# Linux only — for reliable GPU-accelerated WebGL2 (Chromium via QtWebEngine),
+# which sidesteps WebKitGTK's software-GL fallback on weak laptops:
+#   pip install PyQt6 PyQt6-WebEngine
+#   BD_GUI=qt python app.py
+# Windows uses the bundled EdgeChromium (WebView2) backend with no extra deps.
+
+# Packaging (M8):
+#   pip install pyinstaller
