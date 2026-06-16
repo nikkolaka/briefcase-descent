@@ -1,17 +1,14 @@
-// Neon rain background — vivid vertical streaks stream top-to-bottom like rain.
+// Radial neon rain — streaks burst outward from the vanishing point at screen
+// center (where the office worker is falling toward), like driving through rain
+// at speed. Each spoke has two independent drops; the head rushes toward the
+// edge while the trail fades back toward the center.
+//
 // Rendered as a full-screen triangle at far-plane depth (0.9999) so all 3D
 // geometry automatically occludes it via standard depth testing.
 //
-// Layers:
-//   1. Neon rain columns — two independent drops per column, each with a bright
-//      head flash and an exponential trail that fades toward the top.
-//      "Character" banding (fixed sine grid) breaks each trail into segments
-//      so individual drops read clearly rather than blurring together.
-//   2. Radial zoom rings — subtle tunnel-depth cue, same hue cycle as the rain.
-//   3. CRT scanlines — thin contrast bands for retro VHS atmosphere.
-//
-// Hue cycles with uTime and uDepth so colour shifts as you fall deeper.
-// Rain speed ramps with uDepth so the streaks accelerate the further you fall.
+// Physical arc-length lateral profile: spokes merge into a central glow near
+// the vanishing point and separate into distinct streaks toward the edges.
+// Hue and speed both ramp with uDepth so the tunnel accelerates as you fall.
 
 import { Geometry, Program, Mesh, Transform } from 'ogl';
 
@@ -32,6 +29,9 @@ uniform float uDepth;
 uniform float uAspect;
 out vec4 fragColor;
 
+const float PI  = 3.14159265;
+const float TAU = 6.28318530;
+
 vec3 hsv(float h, float s, float v) {
   vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
   vec3 p = abs(fract(vec3(h) + K.xyz) * 6.0 - K.www);
@@ -41,71 +41,84 @@ vec3 hsv(float h, float s, float v) {
 float hash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
 
 void main() {
-  vec2 asp  = (vUv - 0.5) * vec2(uAspect, 1.0) * 2.0;
+  // Aspect-correct centred coords: x ∈ [-aspect, aspect], y ∈ [-1, 1]
+  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0) * 2.0;
+
   float t   = uTime;
   float dep = uDepth;
-
-  // Global hue cycles over time and depth
   float hue = fract(t * 0.06 + dep * 0.00035);
-  // Rain accelerates slightly as you fall deeper
+  // Rain accelerates as you fall deeper
   float spd = 1.0 + dep * 0.0009;
-  // fy: 0 = top of screen, 1 = bottom — rain falls in the +fy direction
-  float fy  = 1.0 - vUv.y;
 
-  // ── Neon rain columns ───────────────────────────────────────────────────────
-  const float COLS = 42.0;
-  float ci = floor(vUv.x * COLS);   // integer column index
-  float cf = fract(vUv.x * COLS);   // [0,1] position within column
+  // Polar coordinates
+  float r  = length(p);
+  float nr = r / 1.85;               // normalise to ≈ 1 at screen edge
+  float a  = atan(p.y, p.x);         // [-π, π]
+  float aN = a / TAU + 0.5;          // [0, 1] around full circle
 
-  // Per-column random seeds
-  float r1 = hash(ci);
-  float r2 = hash(ci + 53.0);
-  float r3 = hash(ci + 106.0);
-  float r4 = hash(ci + 159.0);
+  // ── Radial rain spokes ───────────────────────────────────────────────────────
+  const float RAYS = 54.0;
+  float ri = floor(aN * RAYS);        // integer spoke index
+  float rf = fract(aN * RAYS);        // [0,1] within angular slice
 
-  // Each column gets a slightly shifted hue: hot-pink → cyan → yellow cycle
-  vec3 colColor = hsv(fract(hue + ci * 0.031), 1.0, 1.0);
+  // Per-spoke random constants
+  float r1 = hash(ri);
+  float r2 = hash(ri + 54.0);
+  float r3 = hash(ri + 108.0);
+  float r4 = hash(ri + 162.0);
 
-  // Lateral profile: tight bright core + wider neon glow halo
-  float core = exp(-abs(cf - 0.5) * 16.0);         // sub-pixel bright line
-  float halo = exp(-abs(cf - 0.5) *  5.2) * 0.45;  // soft side glow
-  float lat  = core + halo;
+  // Spoke hue shifts per ray for neon variety
+  vec3 rayCol = hsv(fract(hue + ri * 0.025), 1.0, 1.0);
 
-  // "Character" grid: fixed sine pattern along Y breaks trails into segments —
-  // simulates discrete symbols without needing a font texture.
-  float charGrid = 0.72 + 0.28 * sin(fy * 58.0 + ci * 3.7);
+  // Physical arc-length from spoke centreline at current radius.
+  // Near r=0 all spokes merge (central glow); they separate outward.
+  float arcLen = abs(rf - 0.5) * (TAU / RAYS) * r;
+  float core   = exp(-arcLen * 20.0);          // tight bright centreline
+  float bloom  = exp(-arcLen *  5.5) * 0.45;   // wider neon halo
+  float lat    = core + bloom;
 
-  // ── Drop A ──────────────────────────────────────────────────────────────────
-  float sA  = (0.32 + r1 * 0.48) * spd;      // descent speed
-  float hA  = fract(r2 + t * sA);             // head position (0=top → 1=bottom)
-  float dA  = fract(hA - fy + 1.0);           // distance behind head (wraps)
-  float tlA = 0.11 + r3 * 0.24;               // trail length [0.11 .. 0.35]
-  float trA = dA < tlA ? exp(-dA * 4.0 / tlA) * charGrid : 0.0;
-  trA += exp(-dA * 130.0) * 3.2;              // very bright head flash
+  // ── Spoke drop A ────────────────────────────────────────────────────────────
+  // Head moves radially outward (nr increases over time).
+  // d = 0 at head; positive = behind head (inward / toward centre).
+  float sA  = (0.34 + r1 * 0.46) * spd;
+  float hA  = fract(r2 + t * sA);          // head normalised radius
+  float dA  = fract(hA - nr + 1.0);        // distance behind head
+  float tlA = 0.12 + r3 * 0.24;            // trail length [0.12..0.36]
+  // Banding along the radius simulates discrete raindrops / characters
+  float bA  = 0.70 + 0.30 * sin(nr * 55.0 + ri * 3.3);
+  float trA = dA < tlA ? exp(-dA * 4.2 / tlA) * bA : 0.0;
+  trA += exp(-dA * 140.0) * 3.5;           // very bright leading edge
 
-  // ── Drop B (independent — keeps columns lively when A is off-screen) ────────
-  float sB  = (0.19 + r3 * 0.33) * spd;
-  float hB  = fract(r4 + t * sB + 0.51);
-  float dB  = fract(hB - fy + 1.0);
-  float tlB = 0.08 + r2 * 0.19;
-  // Offset the char phase so A and B don't look identical
-  float charB = 0.72 + 0.28 * sin(fy * 58.0 + ci * 3.7 + 1.9);
-  float trB = dB < tlB ? exp(-dB * 4.0 / tlB) * charB : 0.0;
-  trB += exp(-dB * 130.0) * 3.2;
+  // ── Spoke drop B (independent speed/phase) ───────────────────────────────
+  float sB  = (0.21 + r3 * 0.34) * spd;
+  float hB  = fract(r4 + t * sB + 0.52);
+  float dB  = fract(hB - nr + 1.0);
+  float tlB = 0.09 + r2 * 0.18;
+  float bB  = 0.70 + 0.30 * sin(nr * 55.0 + ri * 3.3 + 2.1);
+  float trB = dB < tlB ? exp(-dB * 4.2 / tlB) * bB : 0.0;
+  trB += exp(-dB * 140.0) * 3.5;
 
   float rain = max(trA, trB) * lat;
 
-  // ── Radial rings — give a vanishing-point tunnel feel ───────────────────────
-  float r     = length(asp);
-  float rfall = dep * 0.006 + t * 0.16;
-  float ring  = fract(r * 4.0 - rfall);
-  float ringB = pow(max(1.0 - abs(ring - 0.5) * 2.8, 0.0), 5.0) * exp(-r * 0.60);
-  vec3 ringC  = hsv(hue, 1.0, 1.0);
+  // Fade to zero at the exact centre (polar singularity) then ramp up quickly
+  rain *= smoothstep(0.0, 0.12, nr);
 
-  // ── Composite ───────────────────────────────────────────────────────────────
+  // ── Central vanishing-point glow ─────────────────────────────────────────────
+  // All spokes converge here — the spot where the worker is headed glows white.
+  float cGlow = exp(-r * 4.5) * 0.75;
+  vec3  cCol  = hsv(fract(hue + 0.5), 0.6, 1.0);  // complementary, slightly desaturated
+
+  // ── Zoom rings (depth cue) ───────────────────────────────────────────────────
+  float rfall = dep * 0.006 + t * 0.18;
+  float ring  = fract(r * 4.2 - rfall);
+  float ringB = pow(max(1.0 - abs(ring - 0.5) * 2.8, 0.0), 5.0) * exp(-r * 0.55);
+  vec3  ringC = hsv(hue, 1.0, 1.0);
+
+  // ── Composite ────────────────────────────────────────────────────────────────
   vec3 col = vec3(0.0);
-  col += colColor * rain  * 1.25;   // vivid rain (dominant)
-  col += ringC    * ringB * 0.18;   // subtle depth rings
+  col += rayCol * rain  * 1.30;   // vivid radial rain
+  col += cCol   * cGlow;          // central glow at vanishing point
+  col += ringC  * ringB * 0.16;   // subtle zoom rings
 
   // Scanlines
   col *= 0.90 + 0.10 * (sin(vUv.y * 290.0) * 0.5 + 0.5);
