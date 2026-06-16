@@ -13,9 +13,9 @@ export const CONFIG = {
 
   // Player lateral movement.
   playerRadius: 0.6,
-  latMaxSpeed: 17, // units/s
-  latAccel: 95, // units/s^2 toward the input target velocity
-  latDamping: 70, // units/s^2 bleed-off when no input
+  latMaxSpeed: 9, // units/s
+  latAccel: 52, // units/s^2 toward the input target velocity
+  latDamping: 38, // units/s^2 bleed-off when no input
 
   // Fall-speed ramp — "he slowly speeds up".
   startSpeed: 22, // units/s at the start of a run

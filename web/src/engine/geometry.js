@@ -138,6 +138,13 @@ export function spikeSphereGeo() {
 
 // Builders indexed by obstacle type (0/1/2). TYPE_RADIUS is the collision
 // half-extent at scale=1 — kept at the core body size, not spike tips, so
-// players can thread past spike tips for satisfying near-misses.
-export const PRIMITIVE_BUILDERS = [spikyCubeGeo, starTetraGeo, spikeSphereGeo];
-export const TYPE_RADIUS = [0.55, 0.58, 0.50];
+// players can thread past detail for satisfying near-misses.
+//
+// The three types are genuine 3D fractals (see engine/fractals.js): a Menger
+// sponge, a Sierpinski tetrahedron, and a marching-cubes Mandelbulb. The legacy
+// spiked primitives above are retained for the headless sim tests / reference.
+// Four structurally distinct 3D fractals as obstacle types.
+// N_TYPES must equal the number of batches created in main.js.
+export { sierpinskiGeo, mandelbulbGeo, mandelboxGeo } from './fractals.js';
+export const N_TYPES   = 4;
+export const TYPE_RADIUS = [0.60, 0.60, 0.58, 0.60]; // Sierp, Bulb8, Mandelbox, Bulb4

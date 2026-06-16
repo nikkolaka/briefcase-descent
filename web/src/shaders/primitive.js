@@ -21,6 +21,7 @@ uniform float uTime;
 out vec3 vColor;
 out vec3 vNormal;
 out float vViewDist;
+out vec3 vLocalPos;
 
 // PS1-style grid snap: lower = more jitter (160 = subtle, 64 = very coarse)
 const float PS1_SNAP = 160.0;
@@ -47,6 +48,7 @@ void main() {
   vViewDist = -viewPos.z;
   vNormal = qrot(q, normal);
   vColor = iColor;
+  vLocalPos = position;
 
   // Snap clip-space XY to a fixed-point grid before the perspective divide.
   // Replicates the PS1's integer vertex coordinates: vertices "swim" as the
@@ -62,19 +64,48 @@ precision mediump float;
 in vec3 vColor;
 in vec3 vNormal;
 in float vViewDist;
+in vec3 vLocalPos;
 
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 
 out vec4 fragColor;
 
+// Sierpinski tetrahedral IFS orbit trap.
+// Folds coordinate space 7 times; the minimum normalised distance to the
+// attractor over all passes is the trap value: near 0 at fractal "bone"
+// edges (→ bright ridge), large in voids (→ shadow).  ~7×10 MADs/frag.
+float ifs(vec3 p) {
+  float s = 1.0;
+  float trap = 1e5;
+  for (int i = 0; i < 7; i++) {
+    p = abs(p);
+    if (p.x < p.y) p.xy = p.yx;
+    if (p.x < p.z) p.xz = p.zx;
+    if (p.y < p.z) p.yz = p.zy;
+    p = p * 2.0 - vec3(1.0);
+    s *= 2.0;
+    trap = min(trap, length(p) / s);
+  }
+  return trap;
+}
+
 void main() {
   vec3 n = normalize(vNormal);
   vec3 L = normalize(vec3(0.4, 0.75, 0.55));
   float diff = clamp(dot(n, L), 0.0, 1.0);
-  float rim = pow(1.0 - abs(normalize(vNormal).z), 2.0);
+  float rim = pow(1.0 - abs(n.z), 2.0);
 
   vec3 col = vColor * (0.45 + 0.7 * diff) + vColor * rim * 0.35;
+
+  // IFS fractal surface detail — same base geometry positions at every
+  // cluster level so the pattern self-repeats across all three scales.
+  float t = ifs(vLocalPos);
+  float glow = 1.0 - smoothstep(0.0, 0.13, t);     // bright fractal edges
+  float fill = smoothstep(0.06, 0.50, t);            // shadow in voids
+  vec3 glowCol = mix(vColor, vec3(1.0), 0.55);       // white-tinted highlight
+  col = col * (0.42 + 0.58 * fill) + glowCol * glow * 0.9;
+
   float fog = clamp(exp(-uFogDensity * vViewDist), 0.0, 1.0);
   col = mix(uFogColor, col, fog);
 

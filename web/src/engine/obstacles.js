@@ -7,10 +7,18 @@
 
 import { CONFIG } from '../game/config.js';
 import { slabRng } from './rng.js';
-import { TYPE_RADIUS } from './geometry.js';
+import { TYPE_RADIUS, N_TYPES } from './geometry.js';
 import { obstacleColor } from '../game/palette.js';
 
 const TAU = Math.PI * 2;
+
+// Three vertices of the Sierpinski triangle in XY (120° apart, unit circumradius).
+// Used to position child and grandchild sub-obstacles around each primary.
+const CHILD_DIRS = [
+  [0.0, 1.0],
+  [-0.866025, -0.5],
+  [0.866025, -0.5],
+];
 
 function randomQuat(rng) {
   // Shoemake's uniform random quaternion.
@@ -46,6 +54,21 @@ function pushObstacle(out, type, x, y, z, scale, rng, depth, salt) {
   });
 }
 
+// Spawn three child obstacles in a Sierpinski triangular ring around a primary.
+// Each obstacle is already a detailed fractal mesh, so one extra scale level of
+// world-space repetition is plenty — it reinforces self-similarity without the
+// poly/instance cost (and the out-of-arena reach) of deeper clustering.
+// rng is consumed deterministically so slabs stay reproducible.
+function pushCluster(out, type, x, y, z, scale, rng, depth, salt) {
+  const s1 = scale / 3.0;
+  const r1 = scale * 0.5; // hug the parent so children stay inside the shaft
+  for (let i = 0; i < 3; i++) {
+    const [dx, dy] = CHILD_DIRS[i];
+    const z1 = z + (rng() - 0.5) * scale * 0.4;
+    pushObstacle(out, (type + 1) % N_TYPES, x + dx * r1, y + dy * r1, z1, s1, rng, depth, salt + 10 + i);
+  }
+}
+
 // A wall of cells across the shaft with a guaranteed rectangular gap to fly through.
 // Sparser than before — fewer obstacles let the fractal geometry read clearly.
 function gridGate(out, rng, baseDepth, localZ, intensity) {
@@ -66,9 +89,10 @@ function gridGate(out, rng, baseDepth, localZ, intensity) {
       if (rng() > fillProb) continue; // extra openness, mostly early on
       const x = -A + (gx + 0.5) * cell;
       const y = -A + (gy + 0.5) * cell;
-      const type = Math.floor(rng() * 3);
+      const type = Math.floor(rng() * N_TYPES);
       const scale = cell * (0.62 + 0.22 * rng());
       pushObstacle(out, type, x, y, z, scale, rng, depth, gx * G + gy);
+      pushCluster(out, type, x, y, z, scale, rng, depth, gx * G + gy);
     }
   }
 }

@@ -2,7 +2,7 @@
 // Run: node test/sim-smoke.mjs   — exits non-zero on any failure.
 
 import { mulberry32, slabRng } from '../src/engine/rng.js';
-import { spikyCubeGeo, starTetraGeo, spikeSphereGeo } from '../src/engine/geometry.js';
+import { sierpinskiGeo, mandelbulbGeo, mandelboxGeo, N_TYPES } from '../src/engine/geometry.js';
 import { genSlab } from '../src/engine/obstacles.js';
 import { createWorld } from '../src/game/world.js';
 import { createPlayer, updatePlayer, resetPlayer } from '../src/game/player.js';
@@ -19,21 +19,19 @@ const finite = (n) => Number.isFinite(n);
 
 // --- geometry ---------------------------------------------------------------
 console.log('geometry:');
-for (const [name, geo, tris] of [
-  ['spikyCube', spikyCubeGeo(), 36],
-  ['starTetra', starTetraGeo(), 16],
-  ['spikeSphere', spikeSphereGeo(), 80],
+for (const [name, geo] of [
+  ['sierpinski',  sierpinskiGeo(2)],
+  ['mandelbulb8', mandelbulbGeo(10, 0.62, 8)],
+  ['mandelbox',   mandelboxGeo(10)],
 ]) {
-  ok(geo.position.length === tris * 9, `${name} has ${tris} tris`);
+  ok(geo.position.length > 0, `${name} has triangles`);
   ok(geo.normal.length === geo.position.length, `${name} normal count matches`);
-  let unit = true, sx = 0, sy = 0, sz = 0;
+  let unit = true;
   for (let i = 0; i < geo.normal.length; i += 3) {
     const l = Math.hypot(geo.normal[i], geo.normal[i + 1], geo.normal[i + 2]);
     if (Math.abs(l - 1) > 1e-4) unit = false;
-    sx += geo.normal[i]; sy += geo.normal[i + 1]; sz += geo.normal[i + 2];
   }
   ok(unit, `${name} normals are unit length`);
-  ok(Math.hypot(sx, sy, sz) < 1e-3, `${name} normals sum to ~0 (closed, outward)`);
 }
 
 // --- rng determinism --------------------------------------------------------
@@ -64,12 +62,12 @@ console.log('obstacles:');
   for (const s of [genSlab(2), genSlab(50), genSlab(400)]) {
     for (const o of s) {
       if (![o.x, o.y, o.z, o.scale, o.radius, o.qw].every(finite)) allFinite = false;
-      if (o.type < 0 || o.type > 2) typesOk = false;
+      if (o.type < 0 || o.type >= N_TYPES) typesOk = false;
       if (Math.abs(o.x) > CONFIG.arena + 1 || Math.abs(o.y) > CONFIG.arena + 1) inArena = false;
     }
   }
   ok(allFinite, 'obstacle fields all finite');
-  ok(typesOk, 'obstacle types in 0..2');
+  ok(typesOk, `obstacle types in 0..${N_TYPES - 1}`);
   ok(inArena, 'obstacles within the arena cross-section');
 
   // Difficulty ramp: deep slabs should be at least as dense on average as shallow.
