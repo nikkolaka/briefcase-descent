@@ -1,16 +1,17 @@
-// Hotline Miami / LSD neon tunnel background.
-// Rendered as a full-screen triangle before the 3D scene so all obstacle
-// geometry appears in front of it automatically via depth testing.
+// Neon rain background — vivid vertical streaks stream top-to-bottom like rain.
+// Rendered as a full-screen triangle at far-plane depth (0.9999) so all 3D
+// geometry automatically occludes it via standard depth testing.
 //
-// Visual layers (all cheap, no textures):
-//   1. Radial rings that zoom toward the viewer as depth increases (falling feel)
-//   2. Rotating diagonal grid — the Hotline Miami floor pattern
-//   3. Angular sector sweep — neon pizza-slice glow
-//   4. Sheared triangle tiling — the Miami triangle motif
-//   5. CRT scanlines — retro VHS atmosphere
+// Layers:
+//   1. Neon rain columns — two independent drops per column, each with a bright
+//      head flash and an exponential trail that fades toward the top.
+//      "Character" banding (fixed sine grid) breaks each trail into segments
+//      so individual drops read clearly rather than blurring together.
+//   2. Radial zoom rings — subtle tunnel-depth cue, same hue cycle as the rain.
+//   3. CRT scanlines — thin contrast bands for retro VHS atmosphere.
 //
-// All layers cycle through a neon HSV palette (hot pink → cyan → electric yellow)
-// keyed to uTime and uDepth so the hue shifts as you fall deeper.
+// Hue cycles with uTime and uDepth so colour shifts as you fall deeper.
+// Rain speed ramps with uDepth so the streaks accelerate the further you fall.
 
 import { Geometry, Program, Mesh, Transform } from 'ogl';
 
@@ -18,9 +19,7 @@ const vert = /* glsl */ `#version 300 es
 in vec2 position;
 out vec2 vUv;
 void main() {
-  // Map full-screen triangle verts (-1..3) to UV 0..1 on the visible [0,1] square.
   vUv = position * 0.5 + 0.5;
-  // Depth = 1 (far plane) so any rasterised 3D fragment covers this.
   gl_Position = vec4(position, 0.9999, 1.0);
 }
 `;
@@ -33,82 +32,89 @@ uniform float uDepth;
 uniform float uAspect;
 out vec4 fragColor;
 
-// Compact HSV → RGB (no branching)
 vec3 hsv(float h, float s, float v) {
   vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
   vec3 p = abs(fract(vec3(h) + K.xyz) * 6.0 - K.www);
   return v * mix(vec3(K.x), clamp(p - K.x, 0.0, 1.0), s);
 }
 
+float hash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
+
 void main() {
-  // Aspect-correct, centred coordinates
-  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0) * 2.0;
+  vec2 asp  = (vUv - 0.5) * vec2(uAspect, 1.0) * 2.0;
+  float t   = uTime;
+  float dep = uDepth;
 
-  float t     = uTime;
-  float depth = uDepth;
-  // phase drives zoom speed and hue cycle — increases with both time and depth
-  float fall  = depth * 0.007 + t * 0.22;
-  float hue   = fract(t * 0.06 + depth * 0.00035);
+  // Global hue cycles over time and depth
+  float hue = fract(t * 0.06 + dep * 0.00035);
+  // Rain accelerates slightly as you fall deeper
+  float spd = 1.0 + dep * 0.0009;
+  // fy: 0 = top of screen, 1 = bottom — rain falls in the +fy direction
+  float fy  = 1.0 - vUv.y;
 
-  // Three neon hues 120° apart: hot pink, cyan, electric yellow rotate together
-  vec3 c0 = hsv(hue,               1.0, 1.0);
-  vec3 c1 = hsv(fract(hue + 0.33), 1.0, 1.0);
-  vec3 c2 = hsv(fract(hue + 0.67), 1.0, 1.0);
+  // ── Neon rain columns ───────────────────────────────────────────────────────
+  const float COLS = 42.0;
+  float ci = floor(vUv.x * COLS);   // integer column index
+  float cf = fract(vUv.x * COLS);   // [0,1] position within column
 
-  float r = length(p);
+  // Per-column random seeds
+  float r1 = hash(ci);
+  float r2 = hash(ci + 53.0);
+  float r3 = hash(ci + 106.0);
+  float r4 = hash(ci + 159.0);
 
-  // ── Layer 1: radial zoom rings ──────────────────────────────────────────────
-  float rings = fract(r * 4.5 - fall);
-  // Thin bright band at the ring boundary, dimmed by distance
-  float ringBand = pow(max(1.0 - abs(rings - 0.5) * 2.2, 0.0), 4.0);
-  ringBand *= exp(-r * 0.55);
+  // Each column gets a slightly shifted hue: hot-pink → cyan → yellow cycle
+  vec3 colColor = hsv(fract(hue + ci * 0.031), 1.0, 1.0);
 
-  // ── Layer 2: rotating diagonal grid (HM floor) ─────────────────────────────
-  float ga   = t * 0.05 + depth * 0.0004;  // slow rotation
-  float ca   = cos(ga), sa = sin(ga);
-  vec2  gp   = vec2(ca*p.x - sa*p.y, sa*p.x + ca*p.y);
-  gp.y      += fall * 0.35;                // scroll along the fall axis
-  vec2  gc   = fract(gp * 2.2) - 0.5;
-  float grid = 1.0 - smoothstep(0.025, 0.08, min(abs(gc.x), abs(gc.y)));
-  grid      *= 0.5 + 0.5 * sin(t * 1.8 + r * 2.5); // pulsed intensity
+  // Lateral profile: tight bright core + wider neon glow halo
+  float core = exp(-abs(cf - 0.5) * 16.0);         // sub-pixel bright line
+  float halo = exp(-abs(cf - 0.5) *  5.2) * 0.45;  // soft side glow
+  float lat  = core + halo;
 
-  // ── Layer 3: angular sector sweep ──────────────────────────────────────────
-  float a       = atan(p.y, p.x);
-  float sectors = sin(a * 7.0 + t * 1.1 + depth * 0.003) * 0.5 + 0.5;
-  float secGlow = sectors * ringBand * 0.9;
+  // "Character" grid: fixed sine pattern along Y breaks trails into segments —
+  // simulates discrete symbols without needing a font texture.
+  float charGrid = 0.72 + 0.28 * sin(fy * 58.0 + ci * 3.7);
 
-  // ── Layer 4: sheared triangle grid (Miami triangle motif) ──────────────────
-  vec2 tp  = gp * 3.5;
-  tp.x    += sin(tp.y * 0.45 + t * 0.7) * 0.25;  // slight warping
-  float tx = abs(fract(tp.x) - 0.5);
-  float ty = abs(fract(tp.y + tp.x * 0.577) - 0.5); // √3 shear → equilateral
-  float tris = 1.0 - smoothstep(0.0, 0.055, min(tx, ty));
+  // ── Drop A ──────────────────────────────────────────────────────────────────
+  float sA  = (0.32 + r1 * 0.48) * spd;      // descent speed
+  float hA  = fract(r2 + t * sA);             // head position (0=top → 1=bottom)
+  float dA  = fract(hA - fy + 1.0);           // distance behind head (wraps)
+  float tlA = 0.11 + r3 * 0.24;               // trail length [0.11 .. 0.35]
+  float trA = dA < tlA ? exp(-dA * 4.0 / tlA) * charGrid : 0.0;
+  trA += exp(-dA * 130.0) * 3.2;              // very bright head flash
 
-  // ── Composite ──────────────────────────────────────────────────────────────
-  // Brightness budget kept very low: obstacles must read clearly in front.
+  // ── Drop B (independent — keeps columns lively when A is off-screen) ────────
+  float sB  = (0.19 + r3 * 0.33) * spd;
+  float hB  = fract(r4 + t * sB + 0.51);
+  float dB  = fract(hB - fy + 1.0);
+  float tlB = 0.08 + r2 * 0.19;
+  // Offset the char phase so A and B don't look identical
+  float charB = 0.72 + 0.28 * sin(fy * 58.0 + ci * 3.7 + 1.9);
+  float trB = dB < tlB ? exp(-dB * 4.0 / tlB) * charB : 0.0;
+  trB += exp(-dB * 130.0) * 3.2;
+
+  float rain = max(trA, trB) * lat;
+
+  // ── Radial rings — give a vanishing-point tunnel feel ───────────────────────
+  float r     = length(asp);
+  float rfall = dep * 0.006 + t * 0.16;
+  float ring  = fract(r * 4.0 - rfall);
+  float ringB = pow(max(1.0 - abs(ring - 0.5) * 2.8, 0.0), 5.0) * exp(-r * 0.60);
+  vec3 ringC  = hsv(hue, 1.0, 1.0);
+
+  // ── Composite ───────────────────────────────────────────────────────────────
   vec3 col = vec3(0.0);
-  col += c0 * ringBand * 0.22;
-  col += c1 * grid     * 0.16;
-  col += c2 * secGlow  * 0.13;
-  col += c0 * tris     * 0.11;
+  col += colColor * rain  * 1.25;   // vivid rain (dominant)
+  col += ringC    * ringB * 0.18;   // subtle depth rings
 
-  // Soft vignette: brighter near the edges, darker toward the vanishing centre
-  float vig = smoothstep(0.0, 1.0, r * 0.45);
-  col = mix(col * 0.35, col, vig);
+  // Scanlines
+  col *= 0.90 + 0.10 * (sin(vUv.y * 290.0) * 0.5 + 0.5);
 
-  // CRT scanlines — thin dark bands every ~3-4 px at typical res
-  float scan = sin(vUv.y * 280.0) * 0.5 + 0.5;
-  col *= 0.88 + 0.12 * scan;
-
-  // Final scale-down: background should be subtle, not compete with obstacles
-  col = clamp(col * 0.55, 0.0, 1.0);
-
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
 
 export function createBackground(gl) {
-  // One large triangle that covers the entire clip-space viewport.
   const geo = new Geometry(gl, {
     position: { size: 2, data: new Float32Array([-1, -1, 3, -1, -1, 3]) },
   });
